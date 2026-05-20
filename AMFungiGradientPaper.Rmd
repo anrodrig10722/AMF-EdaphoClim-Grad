@@ -17,7 +17,7 @@ library(tidyr)
 library(multcompView)
 library(agricolae)   
 
-# 1. Load and subset your data
+#Load and subset your data
 all_data <- read_excel("WorkingFile.xls")
 region_data <- all_data %>% filter(Treatment == 4)
 
@@ -132,174 +132,190 @@ library(vegan)
 library(ggplot2)
 library(ggrepel)
 library(FSA)
+library(permute)
 
-all_data <-read_excel("WorkingFile.xls")
-
+all_data <- read_excel("WorkingFile.xls")
 region_data <- all_data %>% filter(Treatment == 4)
 
-#Only include soil and climate properties 
-region_soil <- subset(region_data, select = -c(forward.absolute.filepath, reverse.absolute.filepath, Treatment, Replicate, Vine, Rootstock, Genotype, Year_of_Planting, Berry_Type, Observed_Diverstiy, Chao1_Diversity, Shannon_Diversity, Evenness_Diversity, AMF_Colonization, Total_Hyphae, Total_Arbuscules, Total_Vesicles, Total_None, Average_Cluster_Count, Average_Cluster_Weight, Average_Harvest, N_Leaf, P_Leaf, K_Leaf, S_Leaf, B_Leaf,Ca_Leaf, Mg_Leaf, Zn_Leaf, Mn_Leaf, Fe_Leaf, Fe_Leaf, Cu_Leaf,Vineyard_Age_yr, total_anthocyanins, quercetin_aglycone, quercetin_glycosides, grape_reaction_product, tannin, polymeric_anthocyanins, catechintannin_index, catechin, gallic_acid, caftaric_acid, caffeic_acid, astilbin, polymeric_anthocyaninstannin_index, Year_of_Sampling, Date_of_Sampling, sampleID, Corrected_None, Corrected_Colonization))
+# Only include soil and climate properties
+region_soil <- subset(region_data, select = -c(
+  forward.absolute.filepath, reverse.absolute.filepath,
+  Treatment, Replicate, Vine, Rootstock, Genotype, Year_of_Planting, Berry_Type,
+  Observed_Diverstiy, Chao1_Diversity, Shannon_Diversity, Evenness_Diversity,
+  AMF_Colonization, Total_Hyphae, Total_Arbuscules, Total_Vesicles, Total_None,
+  Average_Cluster_Count, Average_Cluster_Weight, Average_Harvest,
+  N_Leaf, P_Leaf, K_Leaf, S_Leaf, B_Leaf, Ca_Leaf, Mg_Leaf, Zn_Leaf,
+  Mn_Leaf, Fe_Leaf, Cu_Leaf, Vineyard_Age_yr, total_anthocyanins,
+  quercetin_aglycone, quercetin_glycosides, grape_reaction_product, tannin,
+  polymeric_anthocyanins, catechintannin_index, catechin, gallic_acid,
+  caftaric_acid, caffeic_acid, astilbin, polymeric_anthocyaninstannin_index,
+  Year_of_Sampling, Date_of_Sampling, Corrected_None, Corrected_Colonization))
 
-region_soil$Ammonium <- as.numeric(region_soil$Ammonium)
+region_soil$Ammonium          <- as.numeric(region_soil$Ammonium)
 region_soil$Total_Inorganic_N <- as.numeric(region_soil$Total_Inorganic_N)
-region_soil$PMN <- as.numeric(region_soil$PMN)
-region_soil$MBC <- as.numeric(region_soil$MBC)
-region_soil$Soil_K <- as.numeric(region_soil$Soil_K)
-region_soil$Soil_Na <- as.numeric(region_soil$Soil_Na)
+region_soil$PMN               <- as.numeric(region_soil$PMN)
+region_soil$MBC               <- as.numeric(region_soil$MBC)
+region_soil$Soil_K            <- as.numeric(region_soil$Soil_K)
+region_soil$Soil_Na           <- as.numeric(region_soil$Soil_Na)
 
 region_soil <- na.omit(region_soil)
-# Standardize the soil data 
-numeric_columns <- sapply(region_soil, is.numeric) #scale function only works on numeric columns so need to identify numeric columns 
-normal_soil <- as.data.frame(scale(region_soil[,numeric_columns])) #apply scaling to numeric columns only
-normal_region_soil <- cbind(region_soil[, !numeric_columns], normal_soil) #combined scaled numeric data with non-numeric data 
+region_soil        <- region_soil %>% select(-sampleID)
 
-# Perform PERMANOVA
+# Standardize numeric columns only
+numeric_columns    <- sapply(region_soil, is.numeric)
+normal_soil        <- as.data.frame(scale(region_soil[, numeric_columns]))
+normal_region_soil <- cbind(region_soil[, !numeric_columns], normal_soil)
+
+# Ensure factors
+normal_region_soil$Region   <- as.factor(normal_region_soil$Region)
+normal_region_soil$Location <- as.factor(normal_region_soil$Location)
+
+# --- Global PERMANOVA ---
+set.seed(123)
 region_permanova <- adonis2(
   normal_soil ~ Region,
-  data = normal_region_soil,
-  method = "euclidean",
+  data         = normal_region_soil,
+  method       = "euclidean",
   permutations = 999)
+print(region_permanova)
 
-# global dispersion object (for pairwise permutest convenience)
+# --- Global betadisper (homogeneity of dispersion) ---
 dist_mat_all <- vegdist(normal_soil, method = "euclidean")
-bd_all <- betadisper(dist_mat_all, group = factor(normal_region_soil$Region))
+bd_all       <- betadisper(dist_mat_all, group = normal_region_soil$Region)
+set.seed(123)
+bd_pw        <- permutest(bd_all, pairwise = TRUE, permutations = 999)
+print(bd_pw)
+# NOTE: permuted p-values are above the diagonal in the pairwise table.
+# Pairs with significant betadisper AND significant PERMANOVA should be
+# interpreted cautiously — PERMANOVA may be detecting dispersion differences
+# rather than centroid differences.
 
-# pairwise betadisper (permutest)
-bd_pw <- permutest(bd_all, pairwise = TRUE, permutations = 999)
-print(bd_pw)   # shows permuted p-values for pairwise dispersion comparisons
-
-# pairwise PERMANOVA loop
-groups <- unique(as.character(normal_region_soil$Region))
-pairs <- t(combn(groups, 2))
+# --- Pairwise PERMANOVA loop ---
+set.seed(123)
+groups   <- unique(as.character(normal_region_soil$Region))
+pairs    <- t(combn(groups, 2))
 res_list <- vector("list", nrow(pairs))
 
 for (i in seq_len(nrow(pairs))) {
-  g1 <- pairs[i,1]; g2 <- pairs[i,2]
-  sel <- normal_region_soil$Region %in% c(g1, g2)
-
-  subdata <- normal_soil[sel, , drop = FALSE]
-  subgroup <- factor(normal_region_soil$Region[sel])
-  ntab <- table(subgroup)
+  g1 <- pairs[i, 1]; g2 <- pairs[i, 2]
+  sel      <- normal_region_soil$Region %in% c(g1, g2)
+  subdata  <- normal_soil[sel, , drop = FALSE]
+  submeta  <- normal_region_soil[sel, ]
+  subgroup <- factor(submeta$Region)
+  ntab     <- table(subgroup)
 
   if (any(ntab < 2)) {
-    res_list[[i]] <- data.frame(group1=g1, group2=g2, n1 = as.integer(ntab[1]), n2 = as.integer(ntab[2]),
-                                adonis_F=NA, adonis_R2=NA, adonis_p=NA, betadisper_p=NA, note="too few samples")
+    res_list[[i]] <- data.frame(group1=g1, group2=g2,
+                                n1=as.integer(ntab[1]), n2=as.integer(ntab[2]),
+                                adonis_F=NA, adonis_R2=NA, adonis_p=NA,
+                                betadisper_p=NA, note="too few samples")
     next
   }
 
-  ad <- adonis2(subdata ~ subgroup, method = "euclidean", permutations = 999)
-  ad_F <- ad$F[1]; ad_R2 <- ad$R2[1]; ad_p <- ad$`Pr(>F)`[1]
+  ad    <- adonis2(subdata ~ subgroup, method = "euclidean", permutations = 999)
+  ad_F  <- ad$F[1]; ad_R2 <- ad$R2[1]; ad_p <- ad$`Pr(>F)`[1]
 
-  # For pairwise dispersion p we can extract from bd_pw if present, otherwise compute on subset
-  # Try to extract from bd_pw object:
-  # If bd_pw exists and has pairwise, you can parse it; else compute bd on subset:
-  dm <- vegdist(subdata, method = "euclidean")
+  dm     <- vegdist(subdata, method = "euclidean")
   bd_sub <- betadisper(dm, group = subgroup)
-  bd_p <- permutest(bd_sub, permutations = 999)$tab[1, "Pr(>F)"]
+  bd_p   <- permutest(bd_sub, permutations = 999)$tab[1, "Pr(>F)"]
 
-  res_list[[i]] <- data.frame(group1=g1, group2=g2, n1 = as.integer(ntab[1]), n2 = as.integer(ntab[2]),
-                              adonis_F = ad_F, adonis_R2 = ad_R2, adonis_p = ad_p,
-                              betadisper_p = bd_p, note = "", stringsAsFactors = FALSE)
+  res_list[[i]] <- data.frame(group1=g1, group2=g2,
+                              n1=as.integer(ntab[1]), n2=as.integer(ntab[2]),
+                              adonis_F=ad_F, adonis_R2=ad_R2, adonis_p=ad_p,
+                              betadisper_p=bd_p,
+                              note="exploratory - unrestricted permutations",
+                              stringsAsFactors=FALSE)
 }
 
 pairwise_table <- bind_rows(res_list)
-
-# adjust PERMANOVA p-values (BH)
 valid <- !is.na(pairwise_table$adonis_p)
 pairwise_table$adonis_p_adj_BH <- NA
 pairwise_table$adonis_p_adj_BH[valid] <- p.adjust(pairwise_table$adonis_p[valid], method = "BH")
-
-# Print results: interpret pairs with adonis_p_adj_BH < 0.05 AND betadisper_p >= 0.05 as centroid differences
 print(pairwise_table)
 
-#Perform betadisper analysis to assess variability 
-soil_disper <- betadisper(dist(normal_soil, method = "euclidean"), normal_region_soil$Region)
-
+# --- Betadisper: distances-to-centroid ---
+soil_disper           <- betadisper(dist(normal_soil, method = "euclidean"),
+                                    normal_region_soil$Region)
 distances_to_centroid <- soil_disper$distances
-# Shapiro-Wilk test for normality
-shapiro_result <- shapiro.test(distances_to_centroid)
-print(shapiro_result) #low P indicates that the data does not follow a normal distribituion 
 
-# Perform Kruskal Wallis on the dispersions
+shapiro_result <- shapiro.test(distances_to_centroid)
+print(shapiro_result)
+
+# Shapiro-Wilk confirms non-normality so use non-parametric test
+set.seed(123)
 kruskal_result <- kruskal.test(distances_to_centroid ~ normal_region_soil$Region)
 print(kruskal_result)
 
-# Perform Tukey's HSD test to compare dispersions
-dunn_result <- dunnTest(distances_to_centroid ~ normal_region_soil$Region, method = "bonferroni")
-print(dunn_result) #pairwise comparison shows a significant difference between Northern CA and Oregon as well Central CA and Oregon. Northern and Central CA are not significantly different from one another 
+dunn_result <- dunnTest(distances_to_centroid ~ normal_region_soil$Region,
+                        method = "bonferroni")
+print(dunn_result)
 
-# Extract scores from betadisper object
-scores <- scores(soil_disper, display = "sites")
-scores <- as.data.frame(scores) #convert scores to a dataframe so can be extracted to create vectors in PC
+# --- envfit with unrestricted permutations ---
+# Unrestricted permutations used because vineyard-level variables (e.g., plant variables) are invariant within vineyards, making restricted permutations
+# structurally incapable of producing valid p-values for those variables
+set.seed(123)
+fit <- envfit(soil_disper, normal_soil, permutations = 999)
+print(fit)
 
-scaling_factor <- 3
-#Fit environmental vectors
-fit <- envfit(scores, normal_soil, permutations = 999)
+scaling_factor    <- 3
+vectors           <- as.data.frame(fit$vectors$arrows * sqrt(fit$vectors$r)) * scaling_factor
+rownames(vectors) <- gsub("Normal_", "", rownames(vectors))
 
-#extract vector scores
-vectors <- as.data.frame(fit$vectors$arrows * sqrt(fit$vectors$r))
-vectors <- vectors * scaling_factor 
-
-# Combine scores with the grouping factor
-plot_data <- data.frame(scores, Region = normal_region_soil$Region)
-
+# --- PCoA ---
 pcoa_result <- cmdscale(dist(normal_soil, method = "euclidean"), k = 3, eig = TRUE)
 pcoa_scores <- as.data.frame(pcoa_result$points)
 colnames(pcoa_scores) <- c("PCoA1", "PCoA2", "PCoA3")
-#The cmdscale function performs PCoA on the Euclidean distance matrix (dist(normal_soil, method = "euclidean")) and returns the scores for the first three dimensions.
-
-eigenvalues <- pcoa_result$eig
+eigenvalues      <- pcoa_result$eig
 percent_variance <- eigenvalues / sum(eigenvalues) * 100
-#Eigenvalues are extracted from the PCoA result, and the percentage variance explained by each dimension is calculated. 
 
-#Plot all vectors
+# Use PCoA scores for plot_data 
+plot_data     <- data.frame(pcoa_scores, Region = normal_region_soil$Region)
+region_colors <- c("Central CA" = "#F8766D", "Northern CA" = "#00BFC4", "Oregon" = "#41ab5d")
+
+# Plot with all vectors
 ggplot(plot_data, aes(x = PCoA1, y = PCoA2, color = Region)) +
   geom_point() +
   stat_ellipse() +
   theme_minimal() +
-  labs(
-       x = "PCoA1 (56.3%)",
-       y = "PCoA2 (11.6%)",
+  labs(x = paste0("PCoA1 (", round(percent_variance[1], 1), "%)"),
+       y = paste0("PCoA2 (", round(percent_variance[2], 1), "%)"),
        color = "Region") +
-  scale_fill_manual(values = c(
-    "Central CA" = "#F8766D",
-    "Northern CA" = "#00BFC4",
-    "Oregon" = "#41ab5d"
-  )) +
-  geom_segment(data = vectors, aes(x = 0, xend = PCoA1, y = 0, yend = PCoA2), 
+  scale_color_manual(values = region_colors) +
+  geom_segment(data = vectors, aes(x = 0, xend = PCoA1, y = 0, yend = PCoA2),
                arrow = arrow(length = unit(0.2, "cm")), inherit.aes = FALSE, color = "black") +
-  geom_text_repel(data = vectors, aes(x = PCoA1, y = PCoA2, label = rownames(vectors)), 
-                  size = 3, inherit.aes = FALSE, max.overlaps = 10)
+  geom_text_repel(data = vectors, aes(x = PCoA1, y = PCoA2, label = rownames(vectors)),
+                  size = 3,
+                  box.padding = 0.3,
+                  point.padding = 0.2,
+                  max.overlaps = Inf,
+                  segment.color = "grey50",
+                  segment.size = 0.3,
+                  inherit.aes = FALSE)
 
-# Extract the top ten most important vectors based on correlation
-top_vectors <- as.data.frame(fit$vectors$arrows * sqrt(fit$vectors$r))
-top_vectors <- top_vectors[order(fit$vectors$r, decreasing = TRUE), ][1:10, ]
+# Top 15 vectors only
+top_vectors       <- as.data.frame(fit$vectors$arrows * sqrt(fit$vectors$r))
+top_vectors       <- top_vectors[order(fit$vectors$r, decreasing = TRUE), ][1:15, ] * scaling_factor
+top_vectors$label <- gsub("Normal_", "", rownames(top_vectors))
 
-# Scale vectors for better readability
-scaling_factor <- 3  # Adjust this factor as needed
-top_vectors <- top_vectors * scaling_factor
-
-# Ensure rownames are set for labeling
-top_vectors$label <- rownames(top_vectors)
-
-#only showing top 10 vectors
 a2 <- ggplot(plot_data, aes(x = PCoA1, y = PCoA2, color = Region)) +
   geom_point() +
   stat_ellipse() +
   theme_minimal() +
-  labs(
-       x = "PCoA1 (56.3%)",
-       y = "PCoA2 (11.6%)",
+  labs(x = paste0("PCoA1 (", round(percent_variance[1], 1), "%)"),
+       y = paste0("PCoA2 (", round(percent_variance[2], 1), "%)"),
        color = "Region") +
-  geom_segment(data = top_vectors, aes(x = 0, xend = PCoA1, y = 0, yend = PCoA2), 
+  scale_color_manual(values = region_colors) +
+  geom_segment(data = top_vectors, aes(x = 0, xend = PCoA1, y = 0, yend = PCoA2),
                arrow = arrow(length = unit(0.2, "cm")), inherit.aes = FALSE, color = "black") +
-  geom_text(data = top_vectors, aes(x = PCoA1, y = PCoA2, label = label), size = 2.5, vjust = 1, hjust = 1, inherit.aes = FALSE)+
-  scale_fill_manual(values = c(
-    "Central CA" = "#F8766D",
-    "Northern CA" = "#00BFC4",
-    "Oregon" = "#41ab5d"
-  ))
-
+  geom_text_repel(data = top_vectors, aes(x = PCoA1, y = PCoA2, label = label),
+                  size = 3.5,
+                  box.padding = 0.3,
+                  point.padding = 0.2,
+                  max.overlaps = Inf,
+                  segment.color = "grey50",
+                  segment.size = 0.3,
+                  inherit.aes = FALSE)
+print(a2)
 ```
 
 PCoA + PERMANOVA by Region of Plant Properties 
@@ -308,145 +324,233 @@ library(readxl)
 library(dplyr)
 library(vegan)
 library(ggplot2)
-library(ggrepel) #prevents overlapping text
+library(ggrepel)
+library(readxl)
+library(dplyr)
+library(vegan)
+library(ggplot2)
+library(ggrepel)
+library(FSA)
+library(permute)
 
-all_data <-read_excel("WorkingFile.xls")
-
+all_data <- read_excel("WorkingFile.xls")
 region_data <- all_data %>% filter(Treatment == 4)
 
-#Remove irrelevant columns 
-region_plant <- subset(region_data, select = -c(forward.absolute.filepath, reverse.absolute.filepath, Treatment, Replicate, Vine, Rootstock, Genotype, Year_of_Planting, Berry_Type, Observed_Diverstiy, Chao1_Diversity, Shannon_Diversity, Evenness_Diversity, AMF_Colonization, Total_Hyphae, Total_Arbuscules, Total_Vesicles, Total_None, Year_of_Sampling, Date_of_Sampling, sampleID, Bulk_Density, pH, EC, Nitrate, Ammonium, Total_Inorganic_N, PMN, Phosphate, POXC, MBC, Min_C, Clay_Content, Sand_Content, Normal_Precipitation_cm, Normal_Temperature_C, Soil_K, Soil_Na, Soil_Ca, Soil_Mg, CEC, Soil_Zn, Soil_Mn, Soil_Cu, Soil_Fe, total_anthocyanins, quercetin_aglycone, quercetin_glycosides, grape_reaction_product, tannin, polymeric_anthocyanins, catechintannin_index, catechin, gallic_acid, caftaric_acid, caffeic_acid, astilbin, polymeric_anthocyaninstannin_index, Corrected_None, Corrected_Colonization))
+# Remove irrelevant columns
+region_plant <- subset(region_data, select = -c(
+  forward.absolute.filepath, reverse.absolute.filepath,
+  Treatment, Replicate, Vine, Rootstock, Genotype, Year_of_Planting, Berry_Type,
+  Observed_Diverstiy, Chao1_Diversity, Shannon_Diversity, Evenness_Diversity,
+  AMF_Colonization, Total_Hyphae, Total_Arbuscules, Total_Vesicles, Total_None,
+  Year_of_Sampling, Date_of_Sampling, Bulk_Density, pH, EC, Nitrate,
+  Ammonium, Total_Inorganic_N, PMN, Phosphate, POXC, MBC, Min_C, Clay_Content,
+  Sand_Content, Normal_Precipitation_cm, Normal_Temperature_C, Soil_K, Soil_Na,
+  Soil_Ca, Soil_Mg, CEC, Soil_Zn, Soil_Mn, Soil_Cu, Soil_Fe, total_anthocyanins,
+  quercetin_aglycone, quercetin_glycosides, grape_reaction_product, tannin,
+  polymeric_anthocyanins, catechintannin_index, catechin, gallic_acid, caftaric_acid,
+  caffeic_acid, astilbin, polymeric_anthocyaninstannin_index, Corrected_None,
+  Corrected_Colonization))
 
 region_plant <- na.omit(region_plant)
-# Standardize the soil data 
-numeric_columns <- sapply(region_plant, is.numeric) #scale function only works on numeric columns so need to identify numeric columns 
-normal_plant <- as.data.frame(scale(region_plant[,numeric_columns])) #apply scaling to numeric columns only
-normal_region_plant <- cbind(region_plant[, !numeric_columns], normal_plant) #combined scaled numeric data with non-numeric data 
+region_plant        <- region_plant %>% select(-sampleID)
 
-# Perform PERMANOVA
+# Rename Average_Harvest to Yield for clarity
+region_plant <- region_plant %>% rename(Yield = Average_Harvest)
+
+# Standardize numeric columns only
+numeric_columns     <- sapply(region_plant, is.numeric)
+normal_plant        <- as.data.frame(scale(region_plant[, numeric_columns]))
+normal_region_plant <- cbind(region_plant[, !numeric_columns], normal_plant)
+
+# Ensure factors
+normal_region_plant$Region   <- as.factor(normal_region_plant$Region)
+normal_region_plant$Location <- as.factor(normal_region_plant$Location)
+
+# PSEUDOREPLICATION NOTE
+# Vineyards are fully nested within regions so restricted permutations
+# cannot be applied at the regional level — knowing the vineyard perfectly
+# predicts the region. 
+
+# --- Global PERMANOVA ---
+set.seed(123)
 plant_permanova <- adonis2(
   normal_plant ~ Region,
-  data = normal_region_plant,
-  method = "euclidean",
+  data         = normal_region_plant,
+  method       = "euclidean",
   permutations = 999)
+print(plant_permanova)
 
-set.seed(42)
+# --- Global betadisper (homogeneity of dispersion) ---
+dist_mat_plant <- vegdist(normal_plant, method = "euclidean")
+bd_all_plant   <- betadisper(dist_mat_plant, group = normal_region_plant$Region)
+set.seed(123)
+bd_pw_plant    <- permutest(bd_all_plant, pairwise = TRUE, permutations = 999)
+print(bd_pw_plant)
+# NOTE: permuted p-values are above the diagonal in the pairwise table.
+# Pairs with significant betadisper AND significant PERMANOVA should be
+# interpreted cautiously — PERMANOVA may be detecting dispersion differences
+# rather than centroid differences.
 
+# --- Pairwise PERMANOVA loop ---
+set.seed(123)
+groups   <- unique(as.character(normal_region_plant$Region))
+pairs    <- t(combn(groups, 2))
 res_list <- vector("list", nrow(pairs))
+
 for (i in seq_len(nrow(pairs))) {
-  g1 <- pairs[i,1]; g2 <- pairs[i,2]
-  sel <- normal_region_plant$Region %in% c(g1, g2)
+  g1 <- pairs[i, 1]; g2 <- pairs[i, 2]
+  sel      <- normal_region_plant$Region %in% c(g1, g2)
+  subdata  <- normal_plant[sel, , drop = FALSE]
+  submeta  <- normal_region_plant[sel, ]
+  subgroup <- factor(submeta$Region)
+  ntab     <- table(subgroup)
 
-  # subset data
-  subdata <- normal_plant[sel, , drop = FALSE]
-  subgroup <- factor(normal_region_plant$Region[sel])
-
-  # sample sizes
-  ntab <- table(subgroup)
   if (any(ntab < 2)) {
-    res_list[[i]] <- data.frame(group1 = g1, group2 = g2,
-                                n1 = as.integer(ntab[1]), n2 = as.integer(ntab[2]),
-                                adonis_F = NA, adonis_R2 = NA, adonis_p = NA,
-                                betadisper_p = NA, note = "too few samples",
-                                stringsAsFactors = FALSE)
+    res_list[[i]] <- data.frame(group1=g1, group2=g2,
+                                n1=as.integer(ntab[1]), n2=as.integer(ntab[2]),
+                                adonis_F=NA, adonis_R2=NA, adonis_p=NA,
+                                betadisper_p=NA, note="too few samples")
     next
   }
 
-  # pairwise PERMANOVA
-  ad <- adonis2(subdata ~ subgroup, method = "euclidean", permutations = 999)
-  ad_F <- ad$F[1]
-  ad_R2 <- ad$R2[1]
-  ad_p <- ad$`Pr(>F)`[1]
+  ad    <- adonis2(subdata ~ subgroup, method = "euclidean", permutations = 999)
+  ad_F  <- ad$F[1]; ad_R2 <- ad$R2[1]; ad_p <- ad$`Pr(>F)`[1]
 
-  # pairwise betadisper on the same subset (distance-to-centroid test)
-  dm <- vegdist(subdata, method = "euclidean")
+  dm     <- vegdist(subdata, method = "euclidean")
   bd_sub <- betadisper(dm, group = subgroup)
-  bd_test <- permutest(bd_sub, permutations = 999)
-  bd_p <- bd_test$tab[1, "Pr(>F)"]   # extract the p-value
+  bd_p   <- permutest(bd_sub, permutations = 999)$tab[1, "Pr(>F)"]
 
-  res_list[[i]] <- data.frame(group1 = g1, group2 = g2,
-                              n1 = as.integer(ntab[1]), n2 = as.integer(ntab[2]),
-                              adonis_F = ad_F, adonis_R2 = ad_R2, adonis_p = ad_p,
-                              betadisper_p = bd_p, note = "",
-                              stringsAsFactors = FALSE)
+  res_list[[i]] <- data.frame(group1=g1, group2=g2,
+                              n1=as.integer(ntab[1]), n2=as.integer(ntab[2]),
+                              adonis_F=ad_F, adonis_R2=ad_R2, adonis_p=ad_p,
+                              betadisper_p=bd_p,
+                              note="exploratory - unrestricted permutations",
+                              stringsAsFactors=FALSE)
 }
-pairwise_table <- bind_rows(res_list)
 
-# adjust PERMANOVA p-values (BH)
+pairwise_table <- bind_rows(res_list)
 valid <- !is.na(pairwise_table$adonis_p)
 pairwise_table$adonis_p_adj_BH <- NA
 pairwise_table$adonis_p_adj_BH[valid] <- p.adjust(pairwise_table$adonis_p[valid], method = "BH")
+print(pairwise_table)
 
-pairwise_table
+# --- Betadisper: distances-to-centroid ---
+plant_disper          <- betadisper(dist(normal_plant, method = "euclidean"),
+                                    normal_region_plant$Region)
+distances_to_centroid <- plant_disper$distances
 
-#Perform betadisper analysis to assess variability 
-soil_disper <- betadisper(dist(normal_plant, method = "euclidean"), normal_region_plant$Region)
-
-distances_to_centroid <- soil_disper$distances
-# Shapiro-Wilk test for normality
 shapiro_result <- shapiro.test(distances_to_centroid)
-print(shapiro_result) #low P indicates that the data does not follow a normal distribituion 
+print(shapiro_result)
 
-# Perform Kruskal Wallis on the dispersions
+# Shapiro-Wilk confirms non-normality so use non-parametric test
+set.seed(123)
 kruskal_result <- kruskal.test(distances_to_centroid ~ normal_region_plant$Region)
 print(kruskal_result)
 
-# Perform Tukey's HSD test to compare dispersions
-dunn_result <- dunnTest(distances_to_centroid ~ normal_region_plant$Region, method = "bonferroni")
-print(dunn_result) #pairwise comparison shows a significant difference between Northern CA and Oregon as well Central CA and Oregon. Northern and Central CA are not significantly different from one another 
+dunn_result <- dunnTest(distances_to_centroid ~ normal_region_plant$Region,
+                        method = "bonferroni")
+print(dunn_result)
 
-# Extract scores from betadisper object
-scores <- scores(soil_disper, display = "sites")
-scores <- as.data.frame(scores) #convert scores to a dataframe so can be extracted to create vectors in PC
+#envfit 
+set.seed(123)
+fit <- envfit(plant_disper, normal_plant, permutations = 999)
+print(fit)
 
 scaling_factor <- 3
-#Fit environmental vectors
-fit <- envfit(scores, normal_plant, permutations = 999)
+vectors        <- as.data.frame(fit$vectors$arrows * sqrt(fit$vectors$r)) * scaling_factor
 
-#extract vector scores
-vectors <- as.data.frame(fit$vectors$arrows * sqrt(fit$vectors$r))
-vectors <- vectors * scaling_factor 
-
-# Combine scores with the grouping factor
-plot_data <- data.frame(scores, Region = normal_region_plant$Region)
+# --- PCoA ---
 pcoa_result <- cmdscale(dist(normal_plant, method = "euclidean"), k = 3, eig = TRUE)
-#The cmdscale function performs PCoA on the Euclidean distance matrix (dist(normal_soil, method = "euclidean")) and returns the scores for the first three dimensions.
 pcoa_scores <- as.data.frame(pcoa_result$points)
 colnames(pcoa_scores) <- c("PCoA1", "PCoA2", "PCoA3")
-
-#Eigenvalues are extracted from the PCoA result, and the percentage variance explained by each dimension is calculated
-eigenvalues <- pcoa_result$eig
+eigenvalues      <- pcoa_result$eig
 percent_variance <- eigenvalues / sum(eigenvalues) * 100
 
-#Plot all vectors
+# Use PCoA scores for plot_data 
+plot_data     <- data.frame(pcoa_scores, Region = normal_region_plant$Region)
+region_colors <- c("Central CA" = "#F8766D", "Northern CA" = "#00BFC4", "Oregon" = "#41ab5d")
+
+# Plot with all vectors
 ggplot(plot_data, aes(x = PCoA1, y = PCoA2, color = Region)) +
   geom_point() +
   stat_ellipse() +
   theme_minimal() +
-  labs(
-       x = "PCoA1 (42.3%)",
-       y = "PCoA2 (18.2%)",
+  labs(x = paste0("PCoA1 (", round(percent_variance[1], 1), "%)"),
+       y = paste0("PCoA2 (", round(percent_variance[2], 1), "%)"),
        color = "Region") +
-  scale_fill_manual(values = c(
-    "Central CA" = "#F8766D",
-    "Northern CA" = "#00BFC4",
-    "Oregon" = "#41ab5d"
-  )) +
-  geom_segment(data = vectors, aes(x = 0, xend = PCoA1, y = 0, yend = PCoA2), 
+  scale_color_manual(values = region_colors) +
+  geom_segment(data = vectors, aes(x = 0, xend = PCoA1, y = 0, yend = PCoA2),
                arrow = arrow(length = unit(0.2, "cm")), inherit.aes = FALSE, color = "black") +
-  geom_text_repel(data = vectors, aes(x = PCoA1, y = PCoA2, label = rownames(vectors)), 
-                  size = 3, inherit.aes = FALSE, max.overlaps = 10)
+  geom_text_repel(data = vectors, aes(x = PCoA1, y = PCoA2, label = rownames(vectors)),
+                  size = 3,
+                  box.padding = 0.3,
+                  point.padding = 0.2,
+                  max.overlaps = Inf,
+                  segment.color = "grey50",
+                  segment.size = 0.3,
+                  inherit.aes = FALSE)
 
-b2 <- ggplot(plot_data_plant, aes(x = PCoA1, y = PCoA2, color = Region)) +
+# Top 15 vectors only
+top_vectors_plant       <- as.data.frame(fit$vectors$arrows * sqrt(fit$vectors$r))
+top_vectors_plant       <- top_vectors_plant[order(fit$vectors$r, decreasing = TRUE), ][1:15, ] * scaling_factor
+top_vectors_plant$label <- rownames(top_vectors_plant)
+
+b2 <- ggplot(plot_data, aes(x = PCoA1, y = PCoA2, color = Region)) +
   geom_point() +
   stat_ellipse() +
   theme_minimal() +
-  labs(x = "PCoA1 (42.3%)", y = "PCoA2 (18.2%)", color = "Region") +
-  scale_color_manual(values = c("Central CA" = "#F8766D", "Northern CA" = "#00BFC4", "Oregon" = "#41ab5d")) +
+  labs(x = paste0("PCoA1 (", round(percent_variance[1], 1), "%)"),
+       y = paste0("PCoA2 (", round(percent_variance[2], 1), "%)"),
+       color = "Region") +
+  scale_color_manual(values = region_colors) +
   geom_segment(data = top_vectors_plant, aes(x = 0, xend = PCoA1, y = 0, yend = PCoA2),
                arrow = arrow(length = unit(0.2, "cm")), inherit.aes = FALSE, color = "black") +
   geom_text_repel(data = top_vectors_plant, aes(x = PCoA1, y = PCoA2, label = label),
-                  size = 5, max.overlaps = 30, box.padding = 0.7, point.padding = 0.5, inherit.aes = FALSE)
+                  size = 3.5,
+                  box.padding = 0.3,
+                  point.padding = 0.2,
+                  max.overlaps = Inf,
+                  segment.color = "grey50",
+                  segment.size = 0.3,
+                  inherit.aes = FALSE)
+print(b2)
+
+#Combine to make Fig 2
+library(patchwork)
+library(ragg)
+
+# Update text sizes on both plots
+a2_final <- a2 +
+  theme(
+    axis.title = element_text(size = 14),
+    axis.text  = element_text(size = 12),
+    plot.tag   = element_text(size = 18, face = "bold")
+  )
+
+b2_final <- b2 +
+  theme(
+    axis.title = element_text(size = 14),
+    axis.text  = element_text(size = 12),
+    plot.tag   = element_text(size = 18, face = "bold")
+  )
+
+fig2 <- (a2_final / b2_final) +
+  plot_layout(guides = "collect", ncol = 1) +
+  plot_annotation(
+    tag_levels = "a",
+    tag_prefix = "(",
+    tag_suffix = ")"
+  ) &
+  theme(
+    legend.position = "right",
+    legend.title    = element_text(size = 16),
+    legend.text     = element_text(size = 14),
+    plot.tag        = element_text(size = 18, face = "bold")
+  )
+
+tiff("Fig2.tiff", width = 174, height = 234, units = "mm", res = 600)
+print(fig2)
+dev.off()
 ```
 
 Creating a phyloseq package with qiime outputs of all eleven vineyards
@@ -526,37 +630,144 @@ physeq #print object
 
 Identify OTUs present in all samples 
 ```{r}
-physeq_region <- subset_samples(physeq, Treatment == "4")
-Glomero <- subset_taxa(physeq_region, phylum == "Glomeromycota")
+Glomero <- subset_taxa(physeq, phylum == "Glomeromycota")
+Glomero <- prune_taxa(taxa_sums(Glomero) > 0, Glomero)
 
-#Get sample data and region names
+# Total OTUs across the whole study
+total_OTUs <- ntaxa(Glomero)
+cat("Total Glomeromycota OTUs detected across whole study:", total_OTUs, "\n")
+
+# Extract taxonomy table for all OTUs
+tax_glomero <- as.data.frame(tax_table(Glomero))
+tt_all <- tax_glomero
+unique_genera_glomero <- sort(unique(na.omit(as.character(tax_glomero$genus))))
+cat("Glomeromycota genera detected across all samples:", length(unique_genera_glomero), "\n")
+print(unique_genera_glomero)
+
+# Subset by region
+regions <- unique(as.character(sample_data(Glomero)$Region))
+cat("Regions in dataset:", paste(regions, collapse = ", "), "\n")
+
+# --- Per-region OTU and genus counts ---
 sampledata_glomero <- as.data.frame(sample_data(Glomero))
-sampledata_glomero$Region <- as.character(sampledata_glomero$Region)
-regions <- unique(sampledata_glomero$Region)
+region_species_counts <- data.frame(
+  Region       = character(),
+  OTUCount     = integer(),
+  SpeciesCount = integer(),
+  GeneraCount  = integer(),
+  stringsAsFactors = FALSE
+)
 
-#For each region, get OTUs present
-otus_by_region <- lapply(regions, function(reg) {
-    samples_in_region <- rownames(sampledata_glomero)[sampledata_glomero$Region == reg & !is.na(sampledata_glomero$Region)]
-    if (length(samples_in_region) == 0) {
-        warning(paste("No samples found for region:", reg))
-        return(NULL)
-    }
-    glomero_reg <- prune_samples(samples_in_region, Glomero)
-    glomero_reg <- prune_taxa(taxa_sums(glomero_reg) > 0, glomero_reg)
-    taxa_names(glomero_reg)
-})
+# Store actual genus/species sets per region for intersection later
+region_species_list <- list()
+region_genus_list   <- list()
 
-# Remove any NULLs
-otus_by_region <- otus_by_region[!sapply(otus_by_region, is.null)]
+for (r in regions) {
+  Glomero_r <- subset_samples(Glomero, Region == r)
+  Glomero_r <- prune_taxa(taxa_sums(Glomero_r) > 0, Glomero_r)
 
-#Find shared OTUs present in all regions
-otus_in_all_regions <- Reduce(intersect, otus_by_region)
-cat("Number of Glomeromycota OTUs present in all regions:", length(otus_in_all_regions), "\n")
-print(otus_in_all_regions)
+  tt <- as.data.frame(tax_table(Glomero_r))
 
-#Get taxonomy of shared OTUs
-shared_otu_taxonomy <- as.data.frame(tax_table(Glomero)[otus_in_all_regions, ])
-print(shared_otu_taxonomy)
+  otus_r    <- ntaxa(Glomero_r)
+  species_r <- sort(unique(na.omit(as.character(tt$species))))
+  genera_r  <- sort(unique(na.omit(as.character(tt$genus))))
+
+  region_species_counts <- rbind(
+    region_species_counts,
+    data.frame(Region       = r,
+               OTUCount     = otus_r,
+               SpeciesCount = length(species_r),
+               GeneraCount  = length(genera_r))
+  )
+
+  region_species_list[[r]] <- species_r
+  region_genus_list[[r]]   <- genera_r
+}
+
+print(region_species_counts)
+
+# --- Pairwise region comparisons ---
+region_pairs <- combn(regions, 2, simplify = FALSE)
+
+for (p in region_pairs) {
+  r1 <- p[1]; r2 <- p[2]
+  shared_genera_pair <- intersect(region_genus_list[[r1]], region_genus_list[[r2]])
+  cat("\n--- Comparing", r1, "vs", r2, "---\n")
+  cat("Genera in", r1, ":", length(region_genus_list[[r1]]), "\n")
+  cat("Genera in", r2, ":", length(region_genus_list[[r2]]), "\n")
+  cat("Shared genera:", length(shared_genera_pair), "\n")
+  print(sort(shared_genera_pair))
+
+  # Count OTUs per shared genus
+  tt_shared <- tt_all[tt_all$genus %in% shared_genera_pair, ]
+  otu_counts <- sort(table(tt_shared$genus), decreasing = TRUE)
+  cat("OTUs per shared genus:\n")
+  print(otu_counts)
+}
+
+# --- Taxa detected in ALL regions (intersection) ---
+shared_species_all <- Reduce(intersect, region_species_list)
+shared_genera_all  <- Reduce(intersect, region_genus_list)
+cat("\nSpecies detected in ALL regions:", length(shared_species_all), "\n")
+print(shared_species_all)
+cat("Genera detected in ALL regions:", length(shared_genera_all), "\n")
+print(shared_genera_all)
+
+# --- Genera unique to each region (not found in any other region) ---
+for (r in regions) {
+  other_genera <- unlist(region_genus_list[names(region_genus_list) != r])
+  unique_to_r  <- setdiff(region_genus_list[[r]], other_genera)
+  cat("\nGenera unique to", r, ":\n")
+  if (length(unique_to_r) == 0) {
+    cat("  None\n")
+  } else {
+    cat(paste(" ", unique_to_r, collapse = "\n"), "\n")
+  }
+}
+
+# Genera shared across ALL three regions with OTU counts
+shared_genera_all <- Reduce(intersect, region_genus_list)
+
+cat("Genera detected in ALL three regions:\n\n")
+
+# For each shared genus count OTUs present in all three regions
+shared_genus_results <- data.frame(
+  Genus    = character(),
+  OTUs_in_all_three = integer(),
+  stringsAsFactors = FALSE
+)
+
+for (g in shared_genera_all) {
+  
+  # Get OTUs belonging to this genus
+  genus_otus <- rownames(tt_all[!is.na(tt_all$genus) & tt_all$genus == g, ])
+  
+  # For each region get which of those OTUs are present
+  otus_per_region <- list()
+  for (r in regions) {
+    Glomero_r    <- subset_samples(Glomero, Region == r)
+    Glomero_r    <- prune_taxa(taxa_sums(Glomero_r) > 0, Glomero_r)
+    present_otus <- intersect(genus_otus, taxa_names(Glomero_r))
+    otus_per_region[[r]] <- present_otus
+  }
+  
+  # OTUs present in ALL three regions
+  otus_all_three <- Reduce(intersect, otus_per_region)
+  
+  shared_genus_results <- rbind(
+    shared_genus_results,
+    data.frame(Genus             = g,
+               OTUs_in_all_three = length(otus_all_three),
+               stringsAsFactors  = FALSE)
+  )
+}
+
+# Sort by OTU count descending
+shared_genus_results <- shared_genus_results[
+  order(shared_genus_results$OTUs_in_all_three, decreasing = TRUE), ]
+
+print(shared_genus_results)
+cat("\nTotal OTUs shared across all three regions:", sum(shared_genus_results$OTUs_in_all_three), "\n")
 ```
 
 Regional alpha diversity metrics
@@ -579,22 +790,17 @@ glom_otus <- taxonomy_df %>%
 
 otu_glom <- otus[rownames(otus) %in% glom_otus, ]
 
-# Transpose if needed: vegan expects samples as columns for estimateR()
+# Transpose 
 otu_glom_t <- t(otu_glom)
 
-# Calculate alpha diversity (e.g., Shannon index) for each sample
-shannon_glom <- diversity(t(otu_glom), index="shannon")  # vegan requires samples as rows
+# Calculate Shannon index for each sample
+shannon_glom <- diversity(otu_glom_t, index="shannon")
 
-# If you want species/OTU richness:
-richness_glom <- specnumber(t(otu_glom))
-
+#OTU richness:
+shannon_glom <- diversity(otu_glom_t, index="shannon")
 chao1 <- estimateR(otu_glom_t)["S.chao1", ]
 
-# Shannon already calculated
-shannon_glom <- diversity(otu_glom_t, index="shannon")
-richness_glom <- specnumber(otu_glom_t)
-
-# Pielou's evenness:
+# Evenness:
 evenness_glom <- shannon_glom / log(richness_glom)
 
 results <- data.frame(
@@ -629,7 +835,6 @@ alpha_summary <- all_data_glom %>%
   )
 
 print(alpha_summary)
-
 
 # Filter for Treatment 4 only
 alpha_df_t4 <- all_data_glom[all_data_glom$Treatment == 4, ]
@@ -740,7 +945,6 @@ region_data$Region <- str_trim(region_data$Region)
 
 # Trim whitespace in names of letters
 names(letters) <- str_trim(names(letters))
-
 region_data$Region <- factor(region_data$Region)
 
 # Manually assign letters based on Dunn's test results
@@ -748,7 +952,7 @@ letters_fixed <- c(
   "Central CA" = "a",
   "Northern CA" = "b",
   "Oregon" = "c"
-)  # Should now have unique entries for each region
+)  
 
 kruskal_abundance <- kruskal.test(AMF_Colonization ~ Region, data = region_data)
 dunn_S_abundance <- dunnTest(AMF_Colonization ~ Region, data = region_data, method = "bonferroni") #all significantly different from one another 
@@ -765,7 +969,7 @@ c3 <- ggplot(region_data, aes(x = Region, y = AMF_Colonization, fill = Region)) 
   labs(x = "Region", y = "AM Fungi Abundance (%)") +
   theme_minimal(base_size = 12) +
   theme(
-    axis.text.x = element_text(angle = 45, hjust = 1, size = 12), # <- set size here
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 12), 
     axis.text.y = element_text(size = 12),
     axis.title.x = element_text(size = 14),
     axis.title.y = element_text(size = 14),
@@ -3862,8 +4066,11 @@ alpha_summaryGENO <- genotype %>%
     sd_Evenness = sd(GlomeroEvenness, na.rm=TRUE)
   )
 
+genotype$Location  <- as.factor(genotype$Location)
+genotype$Replicate <- as.factor(genotype$Replicate)
+
 library(FSA)
-kruskal_chao1 <- kruskal.test(GlomeroChao1 ~ Location, data = genotype)
+kruskal_chao1 <- coin::kruskal_test(GlomeroChao1 ~ Location | Replicate, data = genotype)
 print(kruskal_chao1)
 dunn_S_chao1 <- dunnTest(GlomeroChao1 ~ Location, data = genotype, method = "bonferroni") 
 print(dunn_S_chao1)
@@ -3872,8 +4079,8 @@ genotype$Location <- as.factor(genotype$Location)
 
 letters_fixed <- c(
   "NCA-PN" = "a",
-  "OR-PN1" = "b",
-  "OR-PN2" = "ab"
+  "OR-PN1" = "a",
+  "OR-PN2" = "a"
 ) 
 # Create label data
 label_data <- data.frame(
@@ -3906,7 +4113,7 @@ aS1 <- ggplot(genotype, aes(x = Location, y = GlomeroChao1, fill = Location)) +
 print(aS1)
 
 #For data_shannon
-kruskal_data_shannon <- kruskal.test(GlomeroShannon ~ Location, data = genotype)
+kruskal_data_shannon <- coin::kruskal_test(GlomeroShannon ~ Location | Replicate, data = genotype)
 print(kruskal_data_shannon)
 dunn_S_shannon <- dunnTest(GlomeroShannon ~ Location, data = genotype, method = "bonferroni") 
 print(dunn_S_shannon)
@@ -3949,8 +4156,9 @@ bS1 <- ggplot(genotype, aes(x = Location, y = GlomeroShannon, fill = Location)) 
 print(bS1)
 
 #For data_evenness
-kruskal_data_evenness <- kruskal.test(GlomeroEvenness ~ Location, data = genotype)
-dunn_data_evenness <- dunnTest(GlomeroEvenness ~ Location, data = genotype, method = "bonferroni") #all groups have non-significant p values (i.e., > 0.05) #evenness is a measure of how different individuals are distributed in a community
+kruskal_data_evenness <- coin::kruskal_test(GlomeroEvenness ~ Location | Replicate, data = genotype)
+dunn_data_evenness <- dunnTest(GlomeroEvenness ~ Location, data = genotype, method = "bonferroni") 
+print(dunn_data_evenness) #all groups have non-significant p values (i.e., > 0.05) #evenness is a measure of how different individuals are distributed in a community
 ```
 
 Significant tests + boxplot for abundance based on region 
@@ -3962,9 +4170,10 @@ library(stringr)
 
 region_data <- all_data %>% filter(Treatment == 4)
 genotype <- region_data %>% filter(Genotype == "PN x 101-14")
-genotype$Location <- factor(genotype$Location)
+genotype$Location  <- as.factor(genotype$Location)
+genotype$Replicate <- as.factor(genotype$Replicate)
 
-kruskal_abundance <- kruskal.test(AMF_Colonization ~ Location, data = genotype)
+kruskal_abundance <- coin::kruskal_test(AMF_Colonization ~ Location | Replicate, data = genotype)
 print(kruskal_abundance)
 dunn_S_abundance <- dunnTest(AMF_Colonization ~ Location, data = genotype, method = "bonferroni")
 print(dunn_S_abundance)
@@ -4153,12 +4362,7 @@ dS1 <- ggplot(data = relative_abundance, aes(x = Location, y = RelativeAbundance
     legend.title = element_text(size = 16, face = "bold"),
     legend.text = element_text(size = 14),
     plot.title = element_text(size = 22, face = "bold")
-  ) +
-  geom_text(
-    aes(label = sprintf("%.1f%%", RelativeAbundance)),
-    position = position_stack(vjust = 0.5),
-    color = "black", size = 4, fontface = "bold"
-  )
+  ) 
 print(dS1)
 ```
 
@@ -6125,6 +6329,67 @@ physeq #print object
 GlomeroLoc <- subset_taxa(physeq, phylum == "Glomeromycota")
 ```
 
+Testing significant differences in alpha diversity and colonization metrics
+```{r}
+otus <- read.table("OTU_table_final.txt", sep="\t", header=T, row.names=1, check.names=FALSE)
+
+taxon <- read.table("taxonomy.txt", header=TRUE,sep='\t',row.names=1, comment.char = "")
+ranks <- c("kingdom","phylum","class","order","family","genus","species") 
+taxonomy <- taxon %>%
+  mutate_at('Taxonomy',str_replace_all, "[a-z]__","") %>%
+  separate(Taxonomy, sep = ';', into=ranks,remove = TRUE) %>%
+  as.matrix()
+head(taxonomy)
+taxonomy_df <- as.data.frame(taxonomy)
+glom_otus <- taxonomy_df %>%
+  filter(phylum == "Glomeromycota") %>%
+  rownames()
+
+otu_glom <- otus[rownames(otus) %in% glom_otus, ]
+
+# Transpose 
+otu_glom_t <- t(otu_glom)
+
+# Calculate alpha diversity 
+chao1 <- estimateR(otu_glom_t)["S.chao1", ]
+shannon_glom <- diversity(otu_glom_t, index="shannon")
+richness_glom <- specnumber(otu_glom_t)
+evenness_glom <- shannon_glom / log(richness_glom)
+
+# Add to results table
+results <- data.frame(
+  Sample = colnames(otu_glom),
+  GlomeroShannon = shannon_glom,
+  GlomeroRichness = richness_glom,
+  GlomeroChao1 = chao1,
+  GlomeroEvenness = evenness_glom
+)
+
+results <- results %>% rename('sampleID' = Sample)
+
+all_data_glom <- left_join(all_data, results, by = "sampleID")
+region_data <- all_data_glom %>% filter(Treatment == 4)
+scion <- region_data %>% filter(Region == "Oregon")
+scion$Genotype  <- as.factor(scion$Genotype)
+scion$Replicate <- as.factor(scion$Replicate)
+
+set.seed(123)
+kruskal_chao1 <- coin::kruskal_test(GlomeroChao1 ~ Genotype | Replicate, data = scion)
+print(kruskal_chao1)#no significant difference
+
+set.seed(123)
+kruskal_shannon <- coin::kruskal_test(GlomeroShannon ~ Genotype | Replicate, data = scion)
+print(kruskal_shannon) #no significant difference 
+
+set.seed(123)
+kruskal_evenness <- coin::kruskal_test(GlomeroEvenness ~ Genotype | Replicate, data = scion)
+print(kruskal_evenness) #no significant difference 
+
+set.seed(123)
+kruskal_abundance <- coin::kruskal_test(AMF_Colonization ~ Genotype | Replicate, data = scion)
+print(kruskal_abundance) #no significant difference 
+```
+
 Different Scion, Same Rootstock TITAN2
 ```{r}
 
@@ -7024,6 +7289,67 @@ corrplot(
 dev.off()
 ```
 
+Testing significant differences in alpha diversity and colonization metrics
+```{r}
+otus <- read.table("OTU_table_final.txt", sep="\t", header=T, row.names=1, check.names=FALSE)
+
+taxon <- read.table("taxonomy.txt", header=TRUE,sep='\t',row.names=1, comment.char = "")
+ranks <- c("kingdom","phylum","class","order","family","genus","species") 
+taxonomy <- taxon %>%
+  mutate_at('Taxonomy',str_replace_all, "[a-z]__","") %>%
+  separate(Taxonomy, sep = ';', into=ranks,remove = TRUE) %>%
+  as.matrix()
+head(taxonomy)
+taxonomy_df <- as.data.frame(taxonomy)
+glom_otus <- taxonomy_df %>%
+  filter(phylum == "Glomeromycota") %>%
+  rownames()
+
+otu_glom <- otus[rownames(otus) %in% glom_otus, ]
+
+# Transpose 
+otu_glom_t <- t(otu_glom)
+
+# Calculate alpha diversity 
+chao1 <- estimateR(otu_glom_t)["S.chao1", ]
+shannon_glom <- diversity(otu_glom_t, index="shannon")
+richness_glom <- specnumber(otu_glom_t)
+evenness_glom <- shannon_glom / log(richness_glom)
+
+# Add to results table
+results <- data.frame(
+  Sample = colnames(otu_glom),
+  GlomeroShannon = shannon_glom,
+  GlomeroRichness = richness_glom,
+  GlomeroChao1 = chao1,
+  GlomeroEvenness = evenness_glom
+)
+
+results <- results %>% rename('sampleID' = Sample)
+
+all_data_glom <- left_join(all_data, results, by = "sampleID")
+region_data <- all_data_glom %>% filter(Treatment == 4)
+loc <- region_data %>% filter(Location %in% c("NCA-PN", "NCA-CH"))
+loc$Location  <- as.factor(str_trim(loc$Location))
+loc$Replicate <- as.factor(loc$Replicate)
+
+set.seed(123)
+kruskal_chao1 <- coin::kruskal_test(GlomeroChao1 ~ Location | Replicate, data = loc)
+print(kruskal_chao1) #significant differences 
+
+set.seed(123)
+kruskal_shannon <- coin::kruskal_test(GlomeroShannon ~ Location | Replicate, data = loc)
+print(kruskal_shannon) #significant differences 
+
+set.seed(123)
+kruskal_evenness <- coin::kruskal_test(GlomeroEvenness ~ Location | Replicate, data = loc)
+print(kruskal_evenness) #no significant differences
+
+set.seed(123)
+kruskal_abundance <- coin::kruskal_test(AMF_Colonization ~ Location | Replicate, data = loc)
+print(kruskal_abundance)#significant differences 
+```
+
 Different Genotype, Similar Environmnent Significant tests + boxplot for abundance based on region 
 ```{r}
 library(ggplot2)
@@ -7041,21 +7367,6 @@ loc$Location <- factor(loc$Location)
 
 kruskal_abundance <- kruskal.test(AMF_Colonization ~ Location, data = loc)
 dunn_S_abundance <- dunnTest(AMF_Colonization ~ Location, data = loc, method = "bonferroni") #all significantly different from one another 
-
-kruskal_abusc <- kruskal.test(Total_Arbuscules ~ Location, data = genotype)
-print(kruskal_abusc)
-dunn_S_abusc <- dunnTest(Total_Arbuscules ~ Location, data = genotype, method = "bonferroni")
-print(dunn_S_abusc)
-
-kruskal_vesic <- kruskal.test(Total_Vesicles ~ Location, data = genotype)
-print(kruskal_vesic)
-dunn_S_vesic <- dunnTest(Total_Vesicles ~ Location, data = genotype, method = "bonferroni")
-print(dunn_S_vesic)
-
-kruskal_hyph <- kruskal.test(Total_Hyphae ~ Location, data = genotype)
-print(kruskal_hyph)
-dunn_S_hyph <- dunnTest(Total_Hyphae ~ Location, data = genotype, method = "bonferroni")
-print(dunn_S_hyph)
 
 # Create label data
 label_data <- data.frame(
@@ -7193,523 +7504,4 @@ contrast_table1 <- data.frame(
   Contribution = contrast1$Contribution,
   p = contrast1$p
 )
-```
-
-Same Genotype, Different Environment Indicator Species Analysis 
-```{r}
-library(indicspecies)
-library(dplyr)
-library(phyloseq)
-library(tidyr)
-library(stringr)
-library(readxl)
-library(tidyverse)
-
-setwd("/Users/amandarodriguez/taxonomy_UNITE/tax/1_biom_file")
-
-all_data <-read_excel("WorkingFile.xls")
-region_data <- all_data %>% filter(Treatment == 4)
-loc<- region_data  %>% filter(Location %in% c("NCA-PN", "NCA-CH"))
-
-import_table <- read.table('otus.wt.txt',header=TRUE,sep='\t',row.names=1, comment.char = "")
-
-#Creating OTU item
-otumat <- as.matrix(import_table)# convert to a matrix for Phyloseq
-class(otumat) <- "numeric"
-head(otumat)
-OTU <- otu_table(otus.perc, taxa_are_rows = F)
-
-#Creating taxonomy item
-taxon <- read.table("taxonomy.txt", header=TRUE,sep='\t',row.names=1, comment.char = "")
-ranks <- c("kingdom","phylum","class","order","family","genus","species") #provide new column names
-taxonomy <- taxon %>%
-  mutate_at('Taxonomy',str_replace_all, "[a-z]__","") %>%
-  separate(Taxonomy, sep = ';', into=ranks,remove = TRUE) %>%
-  as.matrix()
-head(taxonomy)
-TAX = tax_table(taxonomy)
-
-#Creating a metadata item
-region_data <- all_data %>% filter(Treatment == 4)
-loc<- region_data  %>% filter(Location %in% c("NCA-PN", "NCA-CH"))
-# Remove unwanted columns
-loc_soil <-  loc %>%
-  subset(select = -c(Date_of_Sampling, quercetin_aglycone, grape_reaction_product, gallic_acid, caftaric_acid, caffeic_acid, astilbin))
-
-# Convert to data frame to allow setting row names
-loc_soil <- as.data.frame(loc_soil)
-
-#set row names to sample.id
-rownames(loc_soil) <- loc_soil$sampleID
-loc_soil<- dplyr::select(loc_soil, -sampleID)
-
-# Check the structure of the modified data frame
-str(loc_soil)
-
-# Define metadata_sample_names and otu_sample_names
-metadata_sample_names <- rownames(loc_soil)
-otu_sample_names <- sample_names(OTU)
-
-# Subset metadata to match OTU sample names
-matched_loc_data <- loc_soil[metadata_sample_names %in% otu_sample_names, ]
-
-# Ensure no missing values in sample IDs before setting row names
-if (sum(is.na(rownames(matched_loc_data))) == 0) {
-  rownames(matched_loc_data) <- rownames(matched_loc_data)
-} else {
-  stop("There are still missing values in sample IDs")
-}
-
-META <- sample_data(loc_soil)
-
-physeq <- phyloseq(OTU,TAX,META) #create physeq object 
-physeq
-
-Glomero <- subset_taxa(physeq, phylum == "Glomeromycota")
-
-GlomeroLoc <- subset_taxa(physeq, phylum == "Glomeromycota")
-
-taxonomy_table <- tax_table(GlomeroLoc)# Extract the taxonomy table
-
-taxonomy_df <- as.data.frame(taxonomy_table) 
-# Convert the taxonomy table to a data frame
-
-# Clean up the taxonomy annotations (remove prefixes like "k__", "p__", etc.)
-taxonomy_df_clean <- taxonomy_df %>%
-  mutate_all(~str_replace_all(., "[a-z]__", ""))
-
-# Convert the cleaned data frame to a matrix
-taxonomy_matrix <- as.matrix(taxonomy_df_clean)
-
-# Check the resulting matrixs
-print(taxonomy_matrix)
-
-str(taxonomy_matrix)
-taxonomy_matrix <- as.data.frame(taxonomy_matrix)
-
-# Extract the OTU table and taxonomy table
-otu_table <- as(otu_table(GlomeroLoc), "matrix")
-
-taxa_sums <- colSums(otu_table)
-otu_table_filtered <- otu_table[, taxa_sums >= 5]
-
-all(colnames(otu_table) %in% rownames(taxonomy_matrix))
-colnames(otu_table) <- as.character(colnames(otu_table))
-rownames(taxonomy_matrix) <- as.character(rownames(taxonomy_matrix))
-taxonomy_matrix$genus <- as.character(taxonomy_matrix$genus)
-taxonomy_matrix$genus[is.na(taxonomy_matrix$genus)] <- "Unknown"
-
-
-colnames(otu_table_filtered) <- taxonomy_matrix$genus[match(colnames(otu_table_filtered), rownames(taxonomy_matrix))]
-
-# Ensure that the OTU table and region_data have matching sample identifiers
-common_samples <- intersect(rownames(otu_table), rownames(loc_soil))
-
-gen.tax <- otu_table_filtered[common_samples, ]
-gen.env <- loc_soil[common_samples, ]
-
-gen.tax <- as.data.frame(t(gen.tax))
-cleaned_names <- gsub("\\.\\d+$", "", rownames(gen.tax))
-gen.tax$Genus <- cleaned_names
-gen.tax <- aggregate(. ~ Genus, data = gen.tax, FUN = sum)
-rownames(gen.tax) <- gen.tax$Genus
-gen.tax <- gen.tax[, -1]
-gen.tax <- t(gen.tax)
-rownames(gen.tax) <- as.character(rownames(gen.tax))
-colnames(gen.tax) <- as.character(colnames(gen.tax))
-gen.tax <- as.matrix(gen.tax)
-mode(gen.tax) <- "numeric"
-
-str(gen.tax)
-
-# Create 8-character abbreviations for each taxon
-abbreviate_taxa <- function(taxa_names) {
-  abbreviations <- sapply(taxa_names, function(x) {
-    parts <- unlist(strsplit(x, "_"))
-    abbr <- paste(substr(parts, 1, 8), collapse = "")
-    return(substr(abbr, 1, 8))
-  })
-  return(abbreviations)
-}
-
-colnames(gen.tax) <- abbreviate_taxa(colnames(gen.tax))
-
-common_samples <- intersect(rownames(gen.tax), rownames(loc_soil))
-
-gen.tax <- otu_table[common_samples, ]
-gen.env <- loc_soil[common_samples, ]
-
-gen.tax <- as.data.frame(gen.tax)
-
-# Filter taxa to include only those occurring in at least 3 samples
-taxa_occurrence <- rowSums(gen.tax > 0)
-gen.tax <- gen.tax[, taxa_occurrence >= 3]
-
-#exported document to sum tax for each genus according to sample and imported (removed genus with <3 observations)
-gen_tax <- read_excel("region_tax.xls")
-gen.tax <- gen_tax %>%
-  column_to_rownames(var = "Sample")
-
-common_samples <- intersect(rownames(gen.tax), rownames(loc_soil))
-
-gen.tax <- gen.tax[common_samples, ]        # Use the rownames-based object!
-gen.env <- loc_soil[common_samples, ]
-
-
-#create vetors for grouping variables
-genotype = gen.env$Genotype
-region = gen.env$Region
-
-#Indicator species analysis for location
-inv.gen = multipatt(gen.tax, gen.env$Location, func = "r.g", control = how(nperm=9999))
-summary(inv.gen) #no groups significantly associated with location
-
-sum_invgen <- summary(inv.gen)
-signif_taxa <- as.data.frame(inv.gen$sign)
-signif_taxa$taxon <- rownames(signif_taxa)
-colnames(signif_taxa)
-signif_taxa <- signif_taxa %>% filter(p.value <= 0.05)
-signif_taxa$stars <- cut(signif_taxa$p.value,
-                         breaks = c(-Inf, 0.001, 0.01, 0.05, Inf),
-                         labels = c("***", "**", "*", ""),
-                         right = FALSE)
-group_name_map <- c(
-  "s.NCA-PN"    = "NCA-PN",
-  "s.NCA-CH"    = "NCA-CH"
-)
-group_cols <- sapply(signif_taxa, function(x) all(x %in% c(0, 1, TRUE, FALSE)))
-colnames_for_groups <- names(group_cols)[group_cols]
-
-signif_taxa$Genotype <- apply(signif_taxa[, colnames_for_groups, drop=FALSE], 1, function(row) {
-  group_labels <- group_name_map[names(row)[which(row == 1 | row == TRUE)]]
-  group_labels <- group_labels[!is.na(group_labels)]
-  if (length(group_labels) == 0) return(NA)
-  paste(group_labels, collapse = "; ")
-})
-
-ggplot(signif_taxa, aes(x = reorder(taxon, stat), y = stat, fill = Genotype)) +
-  geom_bar(stat = "identity") +
-  geom_text(aes(label = stars), hjust = -0.15, size = 12, color = "black") +
-  coord_flip(clip = "off") +
-  labs(x = "Taxon", y = "Indicator Value", fill = "Genotype") +
-  scale_y_continuous(expand = expansion(mult = c(0, 0.18))) +
-  theme_minimal(base_size = 16) +
-  theme(
-    panel.border = element_rect(colour = "black", fill = NA, size = 1.3),
-    plot.margin = margin(10, 60, 10, 10),  # Reasonable right margin
-    legend.box.background = element_rect(color = "black", size = 1.3),
-    legend.position = "right"              # Move legend to right of plot
-  )
-
-#Indicator species analysis for 
-inv.gen = multipatt(gen.tax, gen.env$Location, func = "r.g", control = how(nperm=9999))
-summary(inv.gen)
-```
-
-Same Genotype, Different Environment TITAN2
-```{r}
-
-all_data <-read_excel("WorkingFile.xls")
-region_data <- all_data %>% filter(Treatment == 4)
-loc<- region_data  %>% filter(Location %in% c("NCA-PN", "NCA-CH"))
-
-import_table <- read.table('otus.wt.txt',header=TRUE,sep='\t',row.names=1, comment.char = "")
-
-#Creating OTU item
-otumat <- as.matrix(import_table)# convert to a matrix for Phyloseq
-class(otumat) <- "numeric"
-head(otumat)
-OTU <- otu_table(otus.perc, taxa_are_rows = F)
-
-#Creating taxonomy item
-taxon <- read.table("taxonomy.txt", header=TRUE,sep='\t',row.names=1, comment.char = "")
-ranks <- c("kingdom","phylum","class","order","family","genus","species") #provide new column names
-taxonomy <- taxon %>%
-  mutate_at('Taxonomy',str_replace_all, "[a-z]__","") %>%
-  separate(Taxonomy, sep = ';', into=ranks,remove = TRUE) %>%
-  as.matrix()
-head(taxonomy)
-TAX = tax_table(taxonomy)
-
-#Creating a metadata item
-region_data <- all_data %>% filter(Treatment == 4)
-loc<- region_data  %>% filter(Location %in% c("NCA-PN", "NCA-CH"))
-# Remove unwanted columns
-loc_soil <-  loc %>%
-  subset(select = -c(Date_of_Sampling, quercetin_aglycone, grape_reaction_product, gallic_acid, caftaric_acid, caffeic_acid, astilbin))
-
-# Convert to data frame to allow setting row names
-loc_soil <- as.data.frame(loc_soil)
-
-#set row names to sample.id
-rownames(loc_soil) <- loc_soil$sampleID
-loc_soil<- dplyr::select(loc_soil, -sampleID)
-
-# Check the structure of the modified data frame
-str(loc_soil)
-
-# Define metadata_sample_names and otu_sample_names
-metadata_sample_names <- rownames(loc_soil)
-otu_sample_names <- sample_names(OTU)
-
-# Subset metadata to match OTU sample names
-matched_loc_data <- loc_soil[metadata_sample_names %in% otu_sample_names, ]
-
-# Ensure no missing values in sample IDs before setting row names
-if (sum(is.na(rownames(matched_loc_data))) == 0) {
-  rownames(matched_loc_data) <- rownames(matched_loc_data)
-} else {
-  stop("There are still missing values in sample IDs")
-}
-
-META <- sample_data(loc_soil)
-
-physeq <- phyloseq(OTU,TAX,META) #create physeq object 
-physeq
-
-Glomero <- subset_taxa(physeq, phylum == "Glomeromycota")
-
-GlomeroLoc <- subset_taxa(physeq, phylum == "Glomeromycota")
-
-taxonomy_table <- tax_table(GlomeroLoc)# Extract the taxonomy table
-
-taxonomy_df <- as.data.frame(taxonomy_table) 
-# Convert the taxonomy table to a data frame
-
-# Clean up the taxonomy annotations (remove prefixes like "k__", "p__", etc.)
-taxonomy_df_clean <- taxonomy_df %>%
-  mutate_all(~str_replace_all(., "[a-z]__", ""))
-
-# Convert the cleaned data frame to a matrix
-taxonomy_matrix <- as.matrix(taxonomy_df_clean)
-
-# Check the resulting matrixs
-print(taxonomy_matrix)
-
-str(taxonomy_matrix)
-taxonomy_matrix <- as.data.frame(taxonomy_matrix)
-
-# Extract the OTU table and taxonomy table
-otu_table <- as(otu_table(GlomeroLoc), "matrix")
-
-taxa_sums <- colSums(otu_table)
-otu_table_filtered <- otu_table[, taxa_sums >= 5]
-
-all(colnames(otu_table) %in% rownames(taxonomy_matrix))
-colnames(otu_table) <- as.character(colnames(otu_table))
-rownames(taxonomy_matrix) <- as.character(rownames(taxonomy_matrix))
-taxonomy_matrix$genus <- as.character(taxonomy_matrix$genus)
-taxonomy_matrix$genus[is.na(taxonomy_matrix$genus)] <- "Unknown"
-
-
-colnames(otu_table_filtered) <- taxonomy_matrix$genus[match(colnames(otu_table_filtered), rownames(taxonomy_matrix))]
-
-# Ensure that the OTU table and region_data have matching sample identifiers
-common_samples <- intersect(rownames(otu_table), rownames(loc_soil))
-
-gen.tax <- otu_table_filtered[common_samples, ]
-gen.env <- loc_soil[common_samples, ]
-
-gen.tax <- as.data.frame(t(gen.tax))
-cleaned_names <- gsub("\\.\\d+$", "", rownames(gen.tax))
-gen.tax$Genus <- cleaned_names
-gen.tax <- aggregate(. ~ Genus, data = gen.tax, FUN = sum)
-rownames(gen.tax) <- gen.tax$Genus
-gen.tax <- gen.tax[, -1]
-gen.tax <- t(gen.tax)
-rownames(gen.tax) <- as.character(rownames(gen.tax))
-colnames(gen.tax) <- as.character(colnames(gen.tax))
-gen.tax <- as.matrix(gen.tax)
-mode(gen.tax) <- "numeric"
-
-str(gen.tax)
-
-# Create 8-character abbreviations for each taxon
-abbreviate_taxa <- function(taxa_names) {
-  abbreviations <- sapply(taxa_names, function(x) {
-    parts <- unlist(strsplit(x, "_"))
-    abbr <- paste(substr(parts, 1, 8), collapse = "")
-    return(substr(abbr, 1, 8))
-  })
-  return(abbreviations)
-}
-
-colnames(gen.tax) <- abbreviate_taxa(colnames(gen.tax))
-
-common_samples <- intersect(rownames(gen.tax), rownames(loc_soil))
-
-gen.tax <- otu_table[common_samples, ]
-gen.env <- loc_soil[common_samples, ]
-
-gen.tax <- as.data.frame(gen.tax)
-
-# Filter taxa to include only those occurring in at least 3 samples
-taxa_occurrence <- rowSums(gen.tax > 0)
-gen.tax <- gen.tax[, taxa_occurrence >= 3]
-
-#exported document to sum tax for each genus according to sample and imported (removed genus with <3 observations)
-gen_tax <- read_excel("region_tax.xls")
-gen.tax <- gen_tax %>%
-  column_to_rownames(var = "Sample")
-loc <-loc  %>%
-  column_to_rownames(var = "sampleID")
-
-common_samples <- intersect(rownames(gen.tax), rownames(loc))
-
-gen_tax <- gen.tax[common_samples, ]        # Use the rownames-based object!
-gen.env <- loc[common_samples, ]
-
-taxa_occurrence <- colSums(gen_tax > 0)
-gen.tax <- gen_tax[, taxa_occurrence >= 3]
-
-#Bulk Density
-gen.bd <- gen.env %>%
-  select(Bulk_Density)
-attr(gen.bd, "na.action") <- NULL
-
-titan.gen.bd <- titan(gen.bd, gen.tax) #none
-
-#Ammonium
-gen.env$Ammonium <- as.numeric(gen.env$Ammonium)
-
-gen.amn <- gen.env %>%
-  select(Ammonium)
-attr(gen.amn, "na.action") <- NULL 
-
-titan.gen.amn <- titan(gen.amn, gen.tax) #none
-
-#Total_Inorganic_N
-gen.env$Total_Inorganic_N <- as.numeric(gen.env$Total_Inorganic_N)
-
-gen.totn <- gen.env %>%
-  select(Total_Inorganic_N)
-attr(gen.totn, "na.action") <- NULL 
-
-titan.gen.totn <- titan(gen.totn, gen.tax) #none
-
-#Phosphate
-gen.env$Phosphate <- as.numeric(gen.env$Phosphate)
-
-gen.p <- gen.env %>%
-  select(Phosphate)
-attr(gen.p, "na.action") <- NULL 
-
-titan.gen.p <- titan(gen.p, gen.tax) #none 
-
-#Clay Content
-gen.env$Clay_Content <- as.numeric(gen.env$Clay_Content)
-
-gen.clay <- gen.env %>%
-  select(Clay_Content)
-attr(gen.clay, "na.action") <- NULL 
-
-titan.gen.clay <- titan(gen.clay, gen.tax) #none
-
-#Sand_Content
-gen.env$Sand_Content <- as.numeric(gen.env$Sand_Content)
-
-gen.sand <- gen.env %>%
-  select(Sand_Content)
-attr(gen.sand, "na.action") <- NULL 
-
-titan.gen.sand <- titan(gen.sand, gen.tax) #none
-
-#Soil_Na
-gen.env$Soil_Na <- as.numeric(gen.env$Soil_Na)
-
-gen.soilna <- gen.env %>%
-  select(Soil_Na)
-attr(gen.soilna, "na.action") <- NULL 
-
-titan.gen.soilna <- titan(gen.soilna, gen.tax) #none
-
-#Soil_Ca
-gen.env$Soil_Ca <- as.numeric(gen.env$Soil_Ca)
-
-gen.soilca <- gen.env %>%
-  select(Soil_Ca)
-attr(gen.soilca, "na.action") <- NULL 
-
-titan.gen.soilca <- titan(gen.soilca, gen.tax) #none
-
-#Soil_Mg
-gen.env$Soil_Mg <- as.numeric(gen.env$Soil_Mg)
-
-gen.soilmg <- gen.env %>%
-  select(Soil_Mg)
-attr(gen.soilmg, "na.action") <- NULL 
-
-titan.gen.soilmg <- titan(gen.soilmg, gen.tax) #none
-
-#average Cluster Count
-gen.env$Average_Cluster_Count <- as.numeric(gen.env$Average_Cluster_Count)
-
-gen.clusct <- gen.env %>%
-  select(Average_Cluster_Count)
-attr(gen.clusct, "na.action") <- NULL 
-
-titan.gen.clusct <- titan(gen.clusct, gen.tax)
-
-#average Cluster Count
-gen.env$Average_Cluster_Count <- as.numeric(gen.env$Average_Cluster_Count)
-
-gen.clusct <- gen.env %>%
-  select(Average_Cluster_Count)
-attr(gen.clusct, "na.action") <- NULL 
-
-titan.gen.clusct <- titan(gen.clusct, gen.tax) #none
-
-#Average Cluster Weight
-gen.env$Average_Cluster_Weight <- as.numeric(gen.env$Average_Cluster_Weight)
-
-gen.cluswght <- gen.env %>%
-  select(Average_Cluster_Weight)
-attr(gen.cluswght, "na.action") <- NULL 
-
-titan.gen.cluswght <- titan(gen.cluswght, gen.tax) #none
-
-#Average Harvest
-gen.env$Average_Harvest <- as.numeric(gen.env$Average_Harvest)
-
-gen.harvest <- gen.env %>%
-  select(Average_Harvest)
-attr(gen.harvest, "na.action") <- NULL 
-
-titan.gen.harvest <- titan(gen.harvest, gen.tax) #none
-
-#K Leaf
-gen.env$K_Leaf <- as.numeric(gen.env$K_Leaf)
-
-gen.kleaf <- gen.env %>%
-  select(K_Leaf)
-attr(gen.kleaf, "na.action") <- NULL 
-
-titan.gen.kleaf <- titan(gen.kleaf, gen.tax) #none
-
-#B Leaf
-gen.env$B_Leaf <- as.numeric(gen.env$B_Leaf)
-
-gen.bleaf <- gen.env %>%
-  select(B_Leaf)
-attr(gen.bleaf, "na.action") <- NULL 
-
-titan.gen.bleaf <- titan(gen.bleaf, gen.tax) #none
-
-#Ca Leaf
-gen.env$Ca_Leaf <- as.numeric(gen.env$Ca_Leaf)
-
-gen.caleaf <- gen.env %>%
-  select(Ca_Leaf)
-attr(gen.caleaf, "na.action") <- NULL 
-
-titan.gen.caleaf <- titan(gen.caleaf, gen.tax) #none
-
-#Mn Leaf
-gen.env$Mn_Leaf <- as.numeric(gen.env$Mn_Leaf)
-
-gen.mnleaf <- gen.env %>%
-  select(Mn_Leaf)
-attr(gen.mnleaf, "na.action") <- NULL 
-
-titan.gen.mnleaf <- titan(gen.mnleaf, gen.tax) #none
 ```
