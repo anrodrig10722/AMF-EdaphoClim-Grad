@@ -17,14 +17,14 @@ This repository contains the code and resources related to my first dissertation
 
 All analyses and figures are contained in AMFungiGradientPaper.Rmd, organized by research objective. For each comparison, PERMANOVA and Kruskal-Wallis tests were used to assess significance, and ggplot was employed to visualize outcomes. The file is divided into four sections:
 
-## Regional Analyses (All Sites)
+### Regional Analyses (All Sites)
 - Characterizes AM fungal community composition, diversity, and colonization across the full edaphoclimatic gradient from Oregon to California's Central Coast. Community composition is assessed via PCoA ordinations with envfit vectors, with PERMANOVA and betadisper analyses for both soil/climate and plant properties. Alpha diversity and colonization are visualized with boxplots and Kruskal-Wallis tests with Dunn's post-hoc letters, and relative abundance barplots summarize the top 8 genera by region. Correlation heatmaps characterize relationships between alpha diversity and soil/climate and plant properties.
 
-## Same Genotype, Different Environment (PN x 101-14 Across Regions) 
+### Same Genotype, Different Environment (PN x 101-14 Across Regions) 
 - Examines how AM fungal community composition, diversity, and colonization differ in the same scion-rootstock combination grown across contrasting edaphoclimatic environments. Individual soil, climate, and plant variables are compared across locations using Kruskal-Wallis tests, while alpha diversity and colonization are visualized with boxplots and Dunn's post-hoc letters. Relative abundance barplots summarize the top 8 genera by location, and correlation heatmaps characterize relationships between alpha diversity and environmental drivers. Community composition is assessed via NMDS ordinations with envfit vectors, with SIMPER analysis identifying the taxa most responsible for community differences.
 
-## Different Scion, Same Rootstock (Oregon: PN vs. CH on 101-14)
+### Different Scion, Same Rootstock (Oregon: PN vs. CH on 101-14)
 -  Evaluates the effect of scion identity on AM fungal communities by comparing two scions grown on the same rootstock under similar environmental conditions. Community composition is assessed via PCoA ordinations with PERMANOVA and betadisper for both soil and plant properties. Alpha diversity and colonization are compared using permutation-based Kruskal-Wallis tests conditioned on block, and SIMPER analysis identifies taxa driving compositional differences. Correlation heatmaps characterize relationships between alpha diversity and soil/climate and plant properties.
 
-## Different Genotype, Similar Environment (NCA: PN x 101-14 vs. CH x 140R)
+### Different Genotype, Similar Environment (NCA: PN x 101-14 vs. CH x 140R)
 - Assesses how different scion-rootstock combinations shape AM fungal communities under comparable soil and climate conditions. Community composition is evaluated via PCoA ordinations with PERMANOVA and betadisper for soil and plant properties. Alpha diversity and colonization are compared using permutation-based Kruskal-Wallis tests conditioned on block, SIMPER analysis identifies taxa driving compositional differences, and correlation heatmaps characterize relationships between alpha diversity and plant properties.
